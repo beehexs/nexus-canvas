@@ -5,6 +5,7 @@ import {
   Circle,
   IText,
   FabricImage,
+  PencilBrush,
   util,
 } from 'fabric';
 import { io } from 'socket.io-client';
@@ -18,7 +19,13 @@ import {
   Trash2,
   Wifi,
   WifiOff,
+  Palette,
 } from 'lucide-react';
+
+const PRESET_COLORS = [
+  '#f8fafc', '#ef4444', '#f97316', '#eab308',
+  '#22c55e', '#3b82f6', '#8b5cf6', '#ec4899',
+];
 
 const SOCKET_URL = `http://${window.location.hostname}:3001`;
 
@@ -38,6 +45,8 @@ function App() {
 
   const [activeTool, setActiveTool] = useState('select');
   const [isConnected, setIsConnected] = useState(false);
+  const [selectedColor, setSelectedColor] = useState('#f8fafc');
+  const [showColorPicker, setShowColorPicker] = useState(false);
 
   const [userName] = useState(() => `User_${Math.floor(Math.random() * 1000)}`);
   const [userColor] = useState(
@@ -102,6 +111,11 @@ function App() {
       backgroundColor: 'transparent',
     });
     fabricCanvasRef.current = canvas;
+
+    // Set up the free-drawing brush (Fabric v7 requires explicit creation)
+    canvas.freeDrawingBrush = new PencilBrush(canvas);
+    canvas.freeDrawingBrush.color = '#f8fafc';
+    canvas.freeDrawingBrush.width = 3;
 
     // ── Socket ──
     const socket = io(SOCKET_URL, {
@@ -262,7 +276,7 @@ function App() {
       left: 100 + Math.random() * 300,
       top: 100 + Math.random() * 300,
       fill: 'transparent',
-      stroke: userColor,
+      stroke: selectedColor,
       strokeWidth: 2,
       width: 120,
       height: 80,
@@ -281,7 +295,7 @@ function App() {
       top: 150 + Math.random() * 300,
       radius: 50,
       fill: 'transparent',
-      stroke: userColor,
+      stroke: selectedColor,
       strokeWidth: 2,
     });
     c.add(circle);
@@ -298,7 +312,7 @@ function App() {
       top: 200 + Math.random() * 100,
       fontFamily: 'Inter, sans-serif',
       fontSize: 20,
-      fill: userColor,
+      fill: selectedColor,
     });
     c.add(text);
     c.setActiveObject(text);
@@ -308,6 +322,12 @@ function App() {
     const c = fabricCanvasRef.current;
     if (!c) return;
     setActiveTool('pen');
+    // Ensure brush exists and is configured
+    if (!c.freeDrawingBrush) {
+      c.freeDrawingBrush = new PencilBrush(c);
+    }
+    c.freeDrawingBrush.color = selectedColor;
+    c.freeDrawingBrush.width = 3;
     c.isDrawingMode = true;
   };
 
@@ -350,6 +370,27 @@ function App() {
     reader.readAsDataURL(file);
   };
 
+  // Apply color to any currently selected objects
+  const applyColorToSelection = (color) => {
+    const c = fabricCanvasRef.current;
+    const s = socketRef.current;
+    if (!c) return;
+    const activeObjs = c.getActiveObjects();
+    activeObjs.forEach((obj) => {
+      // Text objects use fill, shapes/paths use stroke
+      if (obj.type === 'i-text' || obj.type === 'text' || obj.type === 'textbox') {
+        obj.set('fill', color);
+      } else {
+        obj.set('stroke', color);
+      }
+      obj.setCoords();
+      if (obj.id && s) {
+        s.emit('object-modified', obj.toObject(['id']));
+      }
+    });
+    if (activeObjs.length) c.renderAll();
+  };
+
   return (
     <div className="app-container">
       {/* Toolbar */}
@@ -376,6 +417,56 @@ function App() {
           <ImageIcon size={20} />
           <input type="file" hidden onChange={handleImageUpload} accept="image/*" />
         </label>
+        <div style={{ width: 1, height: 24, background: 'rgba(255,255,255,0.1)', margin: '0 4px' }} />
+        {/* Color Picker */}
+        <div className="color-picker-wrapper">
+          <button
+            className="tool-btn color-trigger"
+            onClick={() => setShowColorPicker(!showColorPicker)}
+            title="Color"
+          >
+            <Palette size={20} />
+            <div className="color-indicator" style={{ background: selectedColor }} />
+          </button>
+          {showColorPicker && (
+            <div className="color-picker-dropdown">
+              <div className="color-swatches">
+                {PRESET_COLORS.map((color) => (
+                  <button
+                    key={color}
+                    className={`color-swatch ${selectedColor === color ? 'active' : ''}`}
+                    style={{ background: color }}
+                    onClick={() => {
+                      setSelectedColor(color);
+                      // Update brush color live if pen is active
+                      const c = fabricCanvasRef.current;
+                      if (c?.freeDrawingBrush) c.freeDrawingBrush.color = color;
+                      // Apply to selected objects
+                      applyColorToSelection(color);
+                    }}
+                  />
+                ))}
+              </div>
+              <div className="color-custom">
+                <label className="color-custom-label">
+                  Custom
+                  <input
+                    type="color"
+                    value={selectedColor}
+                    onChange={(e) => {
+                      setSelectedColor(e.target.value);
+                      const c = fabricCanvasRef.current;
+                      if (c?.freeDrawingBrush) c.freeDrawingBrush.color = e.target.value;
+                      // Apply to selected objects
+                      applyColorToSelection(e.target.value);
+                    }}
+                    className="color-input-native"
+                  />
+                </label>
+              </div>
+            </div>
+          )}
+        </div>
         <div style={{ width: 1, height: 24, background: 'rgba(255,255,255,0.1)', margin: '0 4px' }} />
         <button className="tool-btn" onClick={deleteSelected} title="Delete">
           <Trash2 size={20} color="#ef4444" />
