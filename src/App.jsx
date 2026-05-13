@@ -67,6 +67,8 @@ function App() {
   const [showColorPicker, setShowColorPicker] = useState(false);
   const [lineStyle, setLineStyle] = useState('solid');
   const [showLineStyles, setShowLineStyles] = useState(false);
+  const [strokeSize, setStrokeSize] = useState(3);
+  const [showStrokeSize, setShowStrokeSize] = useState(false);
 
   // Join screen state
   const [userName, setUserName] = useState('');
@@ -76,10 +78,12 @@ function App() {
   const lineDrawingRef = useRef({ isDrawing: false, startX: 0, startY: 0, tempLine: null });
   const lineStyleRef = useRef('solid');
   const selectedColorRef = useRef('#f8fafc');
+  const strokeSizeRef = useRef(3);
 
   // Keep refs in sync with state
   useEffect(() => { lineStyleRef.current = lineStyle; }, [lineStyle]);
   useEffect(() => { selectedColorRef.current = selectedColor; }, [selectedColor]);
+  useEffect(() => { strokeSizeRef.current = strokeSize; }, [strokeSize]);
 
   const [userColor] = useState(
     () => '#' + Math.floor(Math.random() * 16777215).toString(16).padStart(6, '0')
@@ -319,7 +323,7 @@ function App() {
 
       const tempLine = new Line([pointer.x, pointer.y, pointer.x, pointer.y], {
         stroke: selectedColorRef.current,
-        strokeWidth: 2,
+        strokeWidth: strokeSizeRef.current,
         strokeDashArray: dashArray,
         selectable: false,
         evented: false,
@@ -353,20 +357,21 @@ function App() {
 
       const style = lineStyleRef.current;
       const color = selectedColorRef.current;
-      const dashArray = style === 'dash' ? [10, 6] : undefined;
+      const sw = strokeSizeRef.current;
+      const dashArray = style === 'dash' ? [sw * 3.5, sw * 2] : undefined;
 
       if (style === 'arrow') {
         // Create line + arrowhead as a group
         const line = new Line([x1, y1, x2, y2], {
           stroke: color,
-          strokeWidth: 2,
+          strokeWidth: sw,
           originX: 'center',
           originY: 'center',
         });
 
         // Arrowhead triangle
         const angle = Math.atan2(y2 - y1, x2 - x1);
-        const headLen = 14;
+        const headLen = Math.max(14, sw * 5);
         const headAngle = Math.PI / 6;
         const points = [
           { x: x2, y: y2 },
@@ -390,7 +395,7 @@ function App() {
       } else {
         const finalLine = new Line([x1, y1, x2, y2], {
           stroke: color,
-          strokeWidth: 2,
+          strokeWidth: sw,
           strokeDashArray: dashArray,
           selectable: true,
           evented: true,
@@ -474,7 +479,7 @@ function App() {
       c.freeDrawingBrush = new PencilBrush(c);
     }
     c.freeDrawingBrush.color = selectedColor;
-    c.freeDrawingBrush.width = 3;
+    c.freeDrawingBrush.width = strokeSize;
     c.isDrawingMode = true;
   };
 
@@ -485,6 +490,8 @@ function App() {
     setLineStyle(style || lineStyle);
     c.isDrawingMode = false;
     c.selection = false;
+    c.skipTargetFind = true;
+    c.discardActiveObject();
     c._activeLineTool = 'line';
   };
 
@@ -494,7 +501,10 @@ function App() {
     setActiveTool('select');
     c.isDrawingMode = false;
     c.selection = true;
+    c.skipTargetFind = false;
     c._activeLineTool = null;
+    setShowStrokeSize(false);
+    setShowLineStyles(false);
   };
 
   const deleteSelected = () => {
@@ -668,6 +678,64 @@ function App() {
             </div>
           )}
         </div>
+        {/* Stroke Size Control */}
+        {(activeTool === 'pen' || activeTool === 'line') && (
+          <div className="color-picker-wrapper">
+            <button
+              className="tool-btn stroke-trigger"
+              onClick={() => setShowStrokeSize(!showStrokeSize)}
+              title="Stroke Size"
+            >
+              <svg width="20" height="20" viewBox="0 0 20 20">
+                <line x1="3" y1="17" x2="17" y2="3" stroke="currentColor" strokeWidth={strokeSize > 10 ? 4 : strokeSize > 5 ? 3 : 2} strokeLinecap="round" />
+              </svg>
+              <div className="stroke-indicator">{strokeSize}px</div>
+            </button>
+            {showStrokeSize && (
+              <div className="color-picker-dropdown stroke-size-dropdown">
+                <div className="stroke-size-label">Stroke Width</div>
+                <div className="stroke-size-slider-row">
+                  <input
+                    type="range"
+                    min="1"
+                    max="20"
+                    value={strokeSize}
+                    onChange={(e) => {
+                      const v = Number(e.target.value);
+                      setStrokeSize(v);
+                      const c = fabricCanvasRef.current;
+                      if (c?.freeDrawingBrush) c.freeDrawingBrush.width = v;
+                    }}
+                    className="stroke-slider"
+                  />
+                  <span className="stroke-size-value">{strokeSize}px</span>
+                </div>
+                <div className="stroke-preview">
+                  <svg width="100%" height="24" viewBox="0 0 160 24">
+                    <line x1="10" y1="12" x2="150" y2="12" stroke="#f8fafc" strokeWidth={strokeSize} strokeLinecap="round" />
+                  </svg>
+                </div>
+                <div className="stroke-presets">
+                  {[1, 2, 3, 5, 8, 12].map((s) => (
+                    <button
+                      key={s}
+                      className={`stroke-preset-btn ${strokeSize === s ? 'active' : ''}`}
+                      onClick={() => {
+                        setStrokeSize(s);
+                        const c = fabricCanvasRef.current;
+                        if (c?.freeDrawingBrush) c.freeDrawingBrush.width = s;
+                      }}
+                    >
+                      <svg width="28" height="16">
+                        <line x1="4" y1="8" x2="24" y2="8" stroke="currentColor" strokeWidth={s} strokeLinecap="round" />
+                      </svg>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
         <button className="tool-btn" onClick={addRect} title="Rectangle">
           <Square size={20} />
         </button>
