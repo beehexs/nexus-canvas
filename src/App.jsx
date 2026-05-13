@@ -3,11 +3,26 @@ import {
   Canvas,
   Rect,
   Circle,
+  Line,
+  Polygon,
+  Group,
   IText,
   FabricImage,
   PencilBrush,
+  Path,
+  classRegistry,
   util,
 } from 'fabric';
+
+// Fabric v7: explicitly register classes so enlivenObjects can resolve them
+classRegistry.setClass(Rect, 'Rect');
+classRegistry.setClass(Circle, 'Circle');
+classRegistry.setClass(Line, 'Line');
+classRegistry.setClass(Polygon, 'Polygon');
+classRegistry.setClass(Group, 'Group');
+classRegistry.setClass(IText, 'IText');
+classRegistry.setClass(FabricImage, 'Image');
+classRegistry.setClass(Path, 'Path');
 import { io } from 'socket.io-client';
 import {
   MousePointer2,
@@ -20,6 +35,9 @@ import {
   Wifi,
   WifiOff,
   Palette,
+  Minus,
+  MoveRight,
+  LogIn,
 } from 'lucide-react';
 
 const PRESET_COLORS = [
@@ -47,8 +65,22 @@ function App() {
   const [isConnected, setIsConnected] = useState(false);
   const [selectedColor, setSelectedColor] = useState('#f8fafc');
   const [showColorPicker, setShowColorPicker] = useState(false);
+  const [lineStyle, setLineStyle] = useState('solid');
+  const [showLineStyles, setShowLineStyles] = useState(false);
 
-  const [userName] = useState(() => `User_${Math.floor(Math.random() * 1000)}`);
+  // Join screen state
+  const [userName, setUserName] = useState('');
+  const [hasJoined, setHasJoined] = useState(false);
+
+  // Refs for line drawing (avoid stale closure issues)
+  const lineDrawingRef = useRef({ isDrawing: false, startX: 0, startY: 0, tempLine: null });
+  const lineStyleRef = useRef('solid');
+  const selectedColorRef = useRef('#f8fafc');
+
+  // Keep refs in sync with state
+  useEffect(() => { lineStyleRef.current = lineStyle; }, [lineStyle]);
+  useEffect(() => { selectedColorRef.current = selectedColor; }, [selectedColor]);
+
   const [userColor] = useState(
     () => '#' + Math.floor(Math.random() * 16777215).toString(16).padStart(6, '0')
   );
@@ -95,8 +127,9 @@ function App() {
       });
   }, []);
 
-  // ── Setup Fabric + Socket once on mount ──
+  // ── Setup Fabric + Socket after user joins ──
   useEffect(() => {
+    if (!hasJoined) return;
     const container = containerRef.current;
     if (!container) return;
 
@@ -121,19 +154,25 @@ function App() {
     const socket = io(SOCKET_URL, {
       reconnectionAttempts: Infinity,
       reconnectionDelay: 1000,
-      timeout: 10000,
+      reconnectionDelayMax: 5000,
+      timeout: 20000,
     });
     socketRef.current = socket;
 
     socket.on('connect', () => {
       console.log('[socket] connected:', socket.id);
       setIsConnected(true);
+      // Always re-join on connect (handles initial + reconnections)
       socket.emit('join', { name: userName, color: userColor });
     });
 
-    socket.on('disconnect', () => {
-      console.log('[socket] disconnected');
+    socket.on('disconnect', (reason) => {
+      console.log('[socket] disconnected, reason:', reason);
       setIsConnected(false);
+    });
+
+    socket.on('reconnect_attempt', (attempt) => {
+      console.log('[socket] reconnection attempt:', attempt);
     });
 
     socket.on('connect_error', (err) => {
@@ -174,6 +213,7 @@ function App() {
             }
           });
         })
+        .catch((err) => console.error('[fabric] object-added enliven error:', err))
         .finally(() => {
           isRemoteRef.current = false;
         });
@@ -238,6 +278,15 @@ function App() {
       }
     });
 
+    // ── Sync text content after editing ──
+    canvas.on('text:editing:exited', (e) => {
+      if (isRemoteRef.current) return;
+      const obj = e.target;
+      if (obj?.id) {
+        socket.emit('object-modified', obj.toObject(['id']));
+      }
+    });
+
     // ── Mouse tracking ──
     const onMouseMove = (e) => {
       socket.emit('mouse-move', {
@@ -256,6 +305,104 @@ function App() {
     };
     window.addEventListener('resize', onResize);
 
+    // ── Line tool: mouse handlers ──
+    canvas.on('mouse:down', (opt) => {
+      if (canvas._activeLineTool !== 'line') return;
+      const pointer = canvas.getScenePoint(opt.e);
+      const ld = lineDrawingRef.current;
+      ld.isDrawing = true;
+      ld.startX = pointer.x;
+      ld.startY = pointer.y;
+
+      const style = lineStyleRef.current;
+      const dashArray = style === 'dash' ? [10, 6] : undefined;
+
+      const tempLine = new Line([pointer.x, pointer.y, pointer.x, pointer.y], {
+        stroke: selectedColorRef.current,
+        strokeWidth: 2,
+        strokeDashArray: dashArray,
+        selectable: false,
+        evented: false,
+      });
+      ld.tempLine = tempLine;
+      canvas.add(tempLine);
+    });
+
+    canvas.on('mouse:move', (opt) => {
+      const ld = lineDrawingRef.current;
+      if (!ld.isDrawing || !ld.tempLine) return;
+      const pointer = canvas.getScenePoint(opt.e);
+      ld.tempLine.set({ x2: pointer.x, y2: pointer.y });
+      canvas.renderAll();
+    });
+
+    canvas.on('mouse:up', () => {
+      const ld = lineDrawingRef.current;
+      if (!ld.isDrawing || !ld.tempLine) return;
+      ld.isDrawing = false;
+
+      const { x1, y1, x2, y2 } = ld.tempLine;
+      // Remove temp line
+      canvas.remove(ld.tempLine);
+
+      // Ignore tiny accidental clicks
+      if (Math.abs(x2 - x1) < 3 && Math.abs(y2 - y1) < 3) {
+        ld.tempLine = null;
+        return;
+      }
+
+      const style = lineStyleRef.current;
+      const color = selectedColorRef.current;
+      const dashArray = style === 'dash' ? [10, 6] : undefined;
+
+      if (style === 'arrow') {
+        // Create line + arrowhead as a group
+        const line = new Line([x1, y1, x2, y2], {
+          stroke: color,
+          strokeWidth: 2,
+          originX: 'center',
+          originY: 'center',
+        });
+
+        // Arrowhead triangle
+        const angle = Math.atan2(y2 - y1, x2 - x1);
+        const headLen = 14;
+        const headAngle = Math.PI / 6;
+        const points = [
+          { x: x2, y: y2 },
+          { x: x2 - headLen * Math.cos(angle - headAngle), y: y2 - headLen * Math.sin(angle - headAngle) },
+          { x: x2 - headLen * Math.cos(angle + headAngle), y: y2 - headLen * Math.sin(angle + headAngle) },
+        ];
+        const arrow = new Polygon(points, {
+          fill: color,
+          stroke: color,
+          strokeWidth: 1,
+          originX: 'center',
+          originY: 'center',
+        });
+
+        const group = new Group([line, arrow], {
+          selectable: true,
+          evented: true,
+        });
+        canvas.add(group);
+        canvas.setActiveObject(group);
+      } else {
+        const finalLine = new Line([x1, y1, x2, y2], {
+          stroke: color,
+          strokeWidth: 2,
+          strokeDashArray: dashArray,
+          selectable: true,
+          evented: true,
+        });
+        canvas.add(finalLine);
+        canvas.setActiveObject(finalLine);
+      }
+
+      canvas.renderAll();
+      ld.tempLine = null;
+    });
+
     // ── Cleanup ──
     return () => {
       window.removeEventListener('mousemove', onMouseMove);
@@ -264,7 +411,7 @@ function App() {
       socket.disconnect();
       if (canvasEl.parentNode) canvasEl.parentNode.removeChild(canvasEl);
     };
-  }, []); // runs exactly once
+  }, [hasJoined]); // runs when user joins
 
   // ── Tool handlers (stable via ref) ──
   const addRect = () => {
@@ -331,11 +478,23 @@ function App() {
     c.isDrawingMode = true;
   };
 
+  const enableLine = (style) => {
+    const c = fabricCanvasRef.current;
+    if (!c) return;
+    setActiveTool('line');
+    setLineStyle(style || lineStyle);
+    c.isDrawingMode = false;
+    c.selection = false;
+    c._activeLineTool = 'line';
+  };
+
   const disableDrawing = () => {
     const c = fabricCanvasRef.current;
     if (!c) return;
     setActiveTool('select');
     c.isDrawingMode = false;
+    c.selection = true;
+    c._activeLineTool = null;
   };
 
   const deleteSelected = () => {
@@ -376,13 +535,26 @@ function App() {
     const s = socketRef.current;
     if (!c) return;
     const activeObjs = c.getActiveObjects();
-    activeObjs.forEach((obj) => {
-      // Text objects use fill, shapes/paths use stroke
+
+    const applyToObject = (obj) => {
       if (obj.type === 'i-text' || obj.type === 'text' || obj.type === 'textbox') {
         obj.set('fill', color);
+      } else if (obj.type === 'group' && obj._objects) {
+        // Arrow groups: update stroke/fill on all children
+        obj._objects.forEach((child) => {
+          child.set('stroke', color);
+          if (child.type === 'polygon') {
+            child.set('fill', color);
+          }
+        });
+        obj.set('stroke', color);
       } else {
         obj.set('stroke', color);
       }
+    };
+
+    activeObjs.forEach((obj) => {
+      applyToObject(obj);
       obj.setCoords();
       if (obj.id && s) {
         s.emit('object-modified', obj.toObject(['id']));
@@ -390,6 +562,47 @@ function App() {
     });
     if (activeObjs.length) c.renderAll();
   };
+
+  // ── Join screen handler ──
+  const handleJoin = () => {
+    const trimmed = userName.trim();
+    if (!trimmed) return;
+    setUserName(trimmed);
+    setHasJoined(true);
+  };
+
+  // ── Join Screen ──
+  if (!hasJoined) {
+    return (
+      <div className="join-screen">
+        <div className="join-card">
+          <div className="join-logo">✦</div>
+          <h1 className="join-title">Nexus Canvas</h1>
+          <p className="join-subtitle">Real-time collaborative whiteboard</p>
+          <div className="join-form">
+            <input
+              type="text"
+              className="join-input"
+              placeholder="Enter your name..."
+              value={userName}
+              onChange={(e) => setUserName(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handleJoin()}
+              maxLength={20}
+              autoFocus
+            />
+            <button
+              className="join-btn"
+              onClick={handleJoin}
+              disabled={!userName.trim()}
+            >
+              <LogIn size={18} />
+              Join Board
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="app-container">
@@ -404,6 +617,57 @@ function App() {
         <button className={`tool-btn ${activeTool === 'pen' ? 'active' : ''}`} onClick={enableDrawing} title="Pen">
           <PenTool size={20} />
         </button>
+        {/* Line Tool with Style Selector */}
+        <div className="color-picker-wrapper">
+          <button
+            className={`tool-btn ${activeTool === 'line' ? 'active' : ''}`}
+            onClick={() => {
+              if (activeTool === 'line') {
+                setShowLineStyles(!showLineStyles);
+              } else {
+                enableLine(lineStyle);
+                setShowLineStyles(false);
+              }
+            }}
+            title="Line"
+          >
+            <Minus size={20} />
+          </button>
+          {activeTool === 'line' && (
+            <button
+              className="line-style-toggle"
+              onClick={() => setShowLineStyles(!showLineStyles)}
+              title="Line Style"
+            >
+              ▾
+            </button>
+          )}
+          {showLineStyles && (
+            <div className="color-picker-dropdown line-style-dropdown">
+              <button
+                className={`line-style-option ${lineStyle === 'solid' ? 'active' : ''}`}
+                onClick={() => { setLineStyle('solid'); lineStyleRef.current = 'solid'; setShowLineStyles(false); enableLine('solid'); }}
+              >
+                <svg width="40" height="2"><line x1="0" y1="1" x2="40" y2="1" stroke="currentColor" strokeWidth="2" /></svg>
+                <span>Solid</span>
+              </button>
+              <button
+                className={`line-style-option ${lineStyle === 'dash' ? 'active' : ''}`}
+                onClick={() => { setLineStyle('dash'); lineStyleRef.current = 'dash'; setShowLineStyles(false); enableLine('dash'); }}
+              >
+                <svg width="40" height="2"><line x1="0" y1="1" x2="40" y2="1" stroke="currentColor" strokeWidth="2" strokeDasharray="6 4" /></svg>
+                <span>Dashed</span>
+              </button>
+              <button
+                className={`line-style-option ${lineStyle === 'arrow' ? 'active' : ''}`}
+                onClick={() => { setLineStyle('arrow'); lineStyleRef.current = 'arrow'; setShowLineStyles(false); enableLine('arrow'); }}
+              >
+                <MoveRight size={20} />
+                <span>Arrow</span>
+              </button>
+            </div>
+          )}
+        </div>
         <button className="tool-btn" onClick={addRect} title="Rectangle">
           <Square size={20} />
         </button>
