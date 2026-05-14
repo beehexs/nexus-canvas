@@ -38,6 +38,7 @@ import {
   Minus,
   MoveRight,
   LogIn,
+  Download,
 } from 'lucide-react';
 
 const PRESET_COLORS = [
@@ -419,11 +420,20 @@ function App() {
   }, [hasJoined]); // runs when user joins
 
   // ── Tool handlers (stable via ref) ──
+
+  // Shared cleanup to prevent state leakage between tools
+  const resetToolState = (c) => {
+    c.isDrawingMode = false;
+    c.selection = true;
+    c.skipTargetFind = false;
+    c._activeLineTool = null;
+  };
+
   const addRect = () => {
     const c = fabricCanvasRef.current;
     if (!c) return;
     setActiveTool('rect');
-    c.isDrawingMode = false;
+    resetToolState(c);
     const rect = new Rect({
       left: 100 + Math.random() * 300,
       top: 100 + Math.random() * 300,
@@ -441,7 +451,7 @@ function App() {
     const c = fabricCanvasRef.current;
     if (!c) return;
     setActiveTool('circle');
-    c.isDrawingMode = false;
+    resetToolState(c);
     const circle = new Circle({
       left: 150 + Math.random() * 300,
       top: 150 + Math.random() * 300,
@@ -458,7 +468,7 @@ function App() {
     const c = fabricCanvasRef.current;
     if (!c) return;
     setActiveTool('text');
-    c.isDrawingMode = false;
+    resetToolState(c);
     const text = new IText('Double click to edit', {
       left: 200 + Math.random() * 200,
       top: 200 + Math.random() * 100,
@@ -474,6 +484,7 @@ function App() {
     const c = fabricCanvasRef.current;
     if (!c) return;
     setActiveTool('pen');
+    resetToolState(c);
     // Ensure brush exists and is configured
     if (!c.freeDrawingBrush) {
       c.freeDrawingBrush = new PencilBrush(c);
@@ -487,6 +498,7 @@ function App() {
     const c = fabricCanvasRef.current;
     if (!c) return;
     setActiveTool('line');
+    resetToolState(c);
     setLineStyle(style || lineStyle);
     c.isDrawingMode = false;
     c.selection = false;
@@ -499,10 +511,7 @@ function App() {
     const c = fabricCanvasRef.current;
     if (!c) return;
     setActiveTool('select');
-    c.isDrawingMode = false;
-    c.selection = true;
-    c.skipTargetFind = false;
-    c._activeLineTool = null;
+    resetToolState(c);
     setShowStrokeSize(false);
     setShowLineStyles(false);
   };
@@ -802,6 +811,29 @@ function App() {
         <div style={{ width: 1, height: 24, background: 'rgba(255,255,255,0.1)', margin: '0 4px' }} />
         <button className="tool-btn" onClick={deleteSelected} title="Delete">
           <Trash2 size={20} color="#ef4444" />
+        </button>
+        <button
+          className="tool-btn"
+          onClick={() => {
+            const c = fabricCanvasRef.current;
+            if (!c) return;
+            // Save original background and set white for JPG
+            const origBg = c.backgroundColor;
+            c.backgroundColor = '#ffffff';
+            c.renderAll();
+            const dataURL = c.toDataURL({ format: 'jpeg', quality: 0.92, multiplier: 2 });
+            // Restore original background
+            c.backgroundColor = origBg;
+            c.renderAll();
+            // Trigger download
+            const link = document.createElement('a');
+            link.download = `nexus-canvas-${Date.now()}.jpg`;
+            link.href = dataURL;
+            link.click();
+          }}
+          title="Export as JPG"
+        >
+          <Download size={20} />
         </button>
       </div>
 
