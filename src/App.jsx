@@ -46,7 +46,7 @@ const PRESET_COLORS = [
   '#22c55e', '#3b82f6', '#8b5cf6', '#ec4899',
 ];
 
-const SOCKET_URL = `http://${window.location.hostname}:3001`;
+const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || `http://${window.location.hostname}:3001`;
 
 function App() {
   // Use a div container so Fabric.js can manage its own canvas element
