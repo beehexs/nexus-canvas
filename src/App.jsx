@@ -229,8 +229,15 @@ function App() {
       const existing = canvas.getObjects().find((o) => o.id === objData.id);
       if (existing) {
         isRemoteRef.current = true;
+        // For IText objects, explicitly update the text content
+        // because Fabric v7's generic .set() doesn't reliably update it
+        if (objData.text !== undefined && typeof existing.set === 'function') {
+          existing.set('text', objData.text);
+        }
         existing.set(objData);
         existing.setCoords();
+        // Force text re-render by triggering internal dimension recalc
+        if (existing.initDimensions) existing.initDimensions();
         canvas.renderAll();
         isRemoteRef.current = false;
       }
@@ -290,6 +297,18 @@ function App() {
       if (obj?.id) {
         socket.emit('object-modified', obj.toObject(['id']));
       }
+    });
+
+    // ── Live text sync while typing (debounced) ──
+    let textChangeTimer = null;
+    canvas.on('text:changed', (e) => {
+      if (isRemoteRef.current) return;
+      const obj = e.target;
+      if (!obj?.id) return;
+      clearTimeout(textChangeTimer);
+      textChangeTimer = setTimeout(() => {
+        socket.emit('object-modified', obj.toObject(['id']));
+      }, 300);
     });
 
     // ── Mouse tracking ──
