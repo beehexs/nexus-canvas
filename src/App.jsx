@@ -104,8 +104,19 @@ function App() {
       let screenY = c.y;
       if (canvas) {
         const vpt = canvas.viewportTransform;
-        screenX = c.x * vpt[0] + vpt[4];
-        screenY = c.y * vpt[3] + vpt[5];
+        // Apply viewport transform: canvas coords → pixel coords on canvas element
+        const canvasPixelX = c.x * vpt[0] + vpt[4];
+        const canvasPixelY = c.y * vpt[3] + vpt[5];
+        // Add the canvas element's offset in the page
+        const wrapperEl = canvas.wrapperEl || canvas.lowerCanvasEl?.parentNode;
+        if (wrapperEl) {
+          const rect = wrapperEl.getBoundingClientRect();
+          screenX = canvasPixelX + rect.left;
+          screenY = canvasPixelY + rect.top;
+        } else {
+          screenX = canvasPixelX;
+          screenY = canvasPixelY;
+        }
       }
       const el = document.createElement('div');
       el.className = 'user-cursor';
@@ -322,21 +333,17 @@ function App() {
       }, 300);
     });
 
-    // ── Mouse tracking (send canvas-space coordinates) ──
-    const onMouseMove = (e) => {
-      // Convert screen coordinates to canvas coordinates
-      // so cursors are correct regardless of each user's pan/zoom
-      const vpt = canvas.viewportTransform;
-      const canvasX = (e.clientX - vpt[4]) / vpt[0];
-      const canvasY = (e.clientY - vpt[5]) / vpt[3];
+    // ── Mouse tracking (send canvas-space coordinates via Fabric) ──
+    // Use Fabric's mouse:move for accurate scene coordinates
+    canvas.on('mouse:move:before', (opt) => {
+      const scenePoint = canvas.getScenePoint(opt.e);
       socket.emit('mouse-move', {
-        x: canvasX,
-        y: canvasY,
+        x: scenePoint.x,
+        y: scenePoint.y,
         name: userName,
         color: userColor,
       });
-    };
-    window.addEventListener('mousemove', onMouseMove);
+    });
 
     // ── Resize ──
     const onResize = () => {
@@ -580,7 +587,6 @@ function App() {
 
     // ── Cleanup ──
     return () => {
-      window.removeEventListener('mousemove', onMouseMove);
       window.removeEventListener('resize', onResize);
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('keyup', onKeyUp);
