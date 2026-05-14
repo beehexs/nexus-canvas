@@ -95,13 +95,22 @@ function App() {
   const renderCursors = useCallback(() => {
     const layer = cursorLayerRef.current;
     if (!layer) return;
+    const canvas = fabricCanvasRef.current;
     const cursors = remoteCursorsRef.current;
     layer.innerHTML = '';
     Object.values(cursors).forEach((c) => {
+      // Convert canvas-space coordinates to screen-space using local viewport
+      let screenX = c.x;
+      let screenY = c.y;
+      if (canvas) {
+        const vpt = canvas.viewportTransform;
+        screenX = c.x * vpt[0] + vpt[4];
+        screenY = c.y * vpt[3] + vpt[5];
+      }
       const el = document.createElement('div');
       el.className = 'user-cursor';
-      el.style.left = c.x + 'px';
-      el.style.top = c.y + 'px';
+      el.style.left = screenX + 'px';
+      el.style.top = screenY + 'px';
       el.innerHTML = `
         <div class="cursor-dot" style="background:${c.color}"></div>
         <div class="cursor-name" style="border-color:${c.color}">${c.name}</div>
@@ -313,11 +322,16 @@ function App() {
       }, 300);
     });
 
-    // ── Mouse tracking ──
+    // ── Mouse tracking (send canvas-space coordinates) ──
     const onMouseMove = (e) => {
+      // Convert screen coordinates to canvas coordinates
+      // so cursors are correct regardless of each user's pan/zoom
+      const vpt = canvas.viewportTransform;
+      const canvasX = (e.clientX - vpt[4]) / vpt[0];
+      const canvasY = (e.clientY - vpt[5]) / vpt[3];
       socket.emit('mouse-move', {
-        x: e.clientX,
-        y: e.clientY,
+        x: canvasX,
+        y: canvasY,
         name: userName,
         color: userColor,
       });
@@ -477,6 +491,7 @@ function App() {
         panStartX = opt.e.clientX;
         panStartY = opt.e.clientY;
         canvas.requestRenderAll();
+        renderCursors(); // Update remote cursor positions during pan
         opt.e.preventDefault();
         opt.e.stopPropagation();
       }
@@ -496,6 +511,7 @@ function App() {
       zoom *= 0.999 ** delta;
       zoom = Math.min(Math.max(zoom, 0.1), 10);
       canvas.zoomToPoint({ x: opt.e.offsetX, y: opt.e.offsetY }, zoom);
+      renderCursors(); // Update remote cursor positions during zoom
       opt.e.preventDefault();
       opt.e.stopPropagation();
     });
@@ -544,6 +560,7 @@ function App() {
 
         lastTouchDist = info.dist;
         lastTouchCenter = { x: info.cx, y: info.cy };
+        renderCursors(); // Update remote cursor positions during touch pan/zoom
         e.preventDefault();
       }
     };
