@@ -39,6 +39,7 @@ import {
   MoveRight,
   LogIn,
   Download,
+  Hand,
 } from 'lucide-react';
 
 const PRESET_COLORS = [
@@ -147,6 +148,7 @@ function App() {
       width: window.innerWidth,
       height: window.innerHeight,
       backgroundColor: 'transparent',
+      allowTouchScrolling: true,
     });
     fabricCanvasRef.current = canvas;
 
@@ -428,10 +430,146 @@ function App() {
       ld.tempLine = null;
     });
 
+    // ── Pan & Zoom (desktop: Space+drag / Ctrl+wheel, mobile: 2-finger) ──
+    let isPanning = false;
+    let panStartX = 0;
+    let panStartY = 0;
+    let spaceHeld = false;
+
+    const onKeyDown = (e) => {
+      if (e.code === 'Space' && !e.repeat && !spaceHeld) {
+        spaceHeld = true;
+        canvas.defaultCursor = 'grab';
+        canvas.selection = false;
+        e.preventDefault();
+      }
+    };
+    const onKeyUp = (e) => {
+      if (e.code === 'Space') {
+        spaceHeld = false;
+        isPanning = false;
+        canvas.defaultCursor = 'default';
+        // Only restore selection if not in a tool that disables it
+        if (!canvas._activeLineTool && !canvas._activePanTool) {
+          canvas.selection = true;
+        }
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keyup', onKeyUp);
+
+    // Desktop pan via Space+drag or Pan tool
+    canvas.on('mouse:down', (opt) => {
+      if (spaceHeld || canvas._activePanTool) {
+        isPanning = true;
+        panStartX = opt.e.clientX;
+        panStartY = opt.e.clientY;
+        canvas.defaultCursor = 'grabbing';
+        opt.e.preventDefault();
+        opt.e.stopPropagation();
+      }
+    });
+    canvas.on('mouse:move', (opt) => {
+      if (isPanning) {
+        const vpt = canvas.viewportTransform;
+        vpt[4] += opt.e.clientX - panStartX;
+        vpt[5] += opt.e.clientY - panStartY;
+        panStartX = opt.e.clientX;
+        panStartY = opt.e.clientY;
+        canvas.requestRenderAll();
+        opt.e.preventDefault();
+        opt.e.stopPropagation();
+      }
+    });
+    canvas.on('mouse:up', () => {
+      if (isPanning) {
+        isPanning = false;
+        canvas.defaultCursor = spaceHeld ? 'grab' : (canvas._activePanTool ? 'grab' : 'default');
+        canvas.setViewportTransform(canvas.viewportTransform);
+      }
+    });
+
+    // Desktop zoom via Ctrl+wheel (or pinch gesture on trackpad)
+    canvas.on('mouse:wheel', (opt) => {
+      const delta = opt.e.deltaY;
+      let zoom = canvas.getZoom();
+      zoom *= 0.999 ** delta;
+      zoom = Math.min(Math.max(zoom, 0.1), 10);
+      canvas.zoomToPoint({ x: opt.e.offsetX, y: opt.e.offsetY }, zoom);
+      opt.e.preventDefault();
+      opt.e.stopPropagation();
+    });
+
+    // ── Mobile touch: 2-finger pan & pinch-to-zoom ──
+    let lastTouchDist = 0;
+    let lastTouchCenter = null;
+    let touchPanning = false;
+
+    const getTouchInfo = (touches) => {
+      const t1 = touches[0];
+      const t2 = touches[1];
+      const dist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
+      const cx = (t1.clientX + t2.clientX) / 2;
+      const cy = (t1.clientY + t2.clientY) / 2;
+      return { dist, cx, cy };
+    };
+
+    const onTouchStart = (e) => {
+      if (e.touches.length === 2) {
+        touchPanning = true;
+        const info = getTouchInfo(e.touches);
+        lastTouchDist = info.dist;
+        lastTouchCenter = { x: info.cx, y: info.cy };
+        e.preventDefault();
+      }
+    };
+    const onTouchMove = (e) => {
+      if (e.touches.length === 2 && touchPanning) {
+        const info = getTouchInfo(e.touches);
+
+        // Pinch zoom
+        if (lastTouchDist > 0) {
+          let zoom = canvas.getZoom() * (info.dist / lastTouchDist);
+          zoom = Math.min(Math.max(zoom, 0.1), 10);
+          canvas.zoomToPoint({ x: info.cx, y: info.cy }, zoom);
+        }
+
+        // Two-finger pan
+        if (lastTouchCenter) {
+          const vpt = canvas.viewportTransform;
+          vpt[4] += info.cx - lastTouchCenter.x;
+          vpt[5] += info.cy - lastTouchCenter.y;
+          canvas.requestRenderAll();
+        }
+
+        lastTouchDist = info.dist;
+        lastTouchCenter = { x: info.cx, y: info.cy };
+        e.preventDefault();
+      }
+    };
+    const onTouchEnd = (e) => {
+      if (e.touches.length < 2) {
+        touchPanning = false;
+        lastTouchDist = 0;
+        lastTouchCenter = null;
+        canvas.setViewportTransform(canvas.viewportTransform);
+      }
+    };
+
+    const upperCanvas = canvasEl.parentNode?.querySelector('.upper-canvas') || canvasEl;
+    upperCanvas.addEventListener('touchstart', onTouchStart, { passive: false });
+    upperCanvas.addEventListener('touchmove', onTouchMove, { passive: false });
+    upperCanvas.addEventListener('touchend', onTouchEnd);
+
     // ── Cleanup ──
     return () => {
       window.removeEventListener('mousemove', onMouseMove);
       window.removeEventListener('resize', onResize);
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keyup', onKeyUp);
+      upperCanvas.removeEventListener('touchstart', onTouchStart);
+      upperCanvas.removeEventListener('touchmove', onTouchMove);
+      upperCanvas.removeEventListener('touchend', onTouchEnd);
       canvas.dispose();
       socket.disconnect();
       if (canvasEl.parentNode) canvasEl.parentNode.removeChild(canvasEl);
@@ -446,6 +584,20 @@ function App() {
     c.selection = true;
     c.skipTargetFind = false;
     c._activeLineTool = null;
+    c._activePanTool = false;
+    c.defaultCursor = 'default';
+  };
+
+  const enablePan = () => {
+    const c = fabricCanvasRef.current;
+    if (!c) return;
+    setActiveTool('pan');
+    resetToolState(c);
+    c._activePanTool = true;
+    c.selection = false;
+    c.skipTargetFind = true;
+    c.discardActiveObject();
+    c.defaultCursor = 'grab';
   };
 
   const addRect = () => {
@@ -651,6 +803,9 @@ function App() {
         </div>
         <button className={`tool-btn ${activeTool === 'select' ? 'active' : ''}`} onClick={disableDrawing} title="Select">
           <MousePointer2 size={20} />
+        </button>
+        <button className={`tool-btn ${activeTool === 'pan' ? 'active' : ''}`} onClick={enablePan} title="Pan (or hold Space)">
+          <Hand size={20} />
         </button>
         <button className={`tool-btn ${activeTool === 'pen' ? 'active' : ''}`} onClick={enableDrawing} title="Pen">
           <PenTool size={20} />
