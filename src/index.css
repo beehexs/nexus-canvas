@@ -36,7 +36,7 @@ body {
 }
 
 .toolbar {
-  position: absolute;
+  position: fixed;
   top: 20px;
   left: 50%;
   transform: translateX(-50%);
@@ -50,6 +50,33 @@ body {
   box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3);
   z-index: 100;
   align-items: center;
+}
+
+/* Mobile toolbar: fixed top, full-width, scrollable */
+@media (max-width: 768px) {
+  .toolbar {
+    top: 0;
+    left: 0;
+    right: 0;
+    transform: none;
+    border-radius: 0 0 14px 14px;
+    padding: 10px 12px;
+    padding-top: max(10px, env(safe-area-inset-top));
+    gap: 6px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none; /* Firefox */
+    max-width: 100%;
+    width: 100%;
+    box-sizing: border-box;
+  }
+  .toolbar::-webkit-scrollbar {
+    display: none; /* Chrome/Safari */
+  }
+  .toolbar > * {
+    flex-shrink: 0;
+  }
 }
 
 .tool-btn {
@@ -107,13 +134,26 @@ body {
 }
 
 .user-presence {
-  position: absolute;
+  position: fixed;
   top: 20px;
   right: 20px;
   display: flex;
   flex-direction: column;
   gap: 8px;
   z-index: 100;
+}
+
+@media (max-width: 768px) {
+  .user-presence {
+    top: auto;
+    bottom: 12px;
+    right: 12px;
+    left: 12px;
+    flex-direction: row;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 6px;
+  }
 }
 
 .user-badge {
