@@ -1014,19 +1014,56 @@ function App() {
           onClick={() => {
             const c = fabricCanvasRef.current;
             if (!c) return;
-            // Save original background and set white for JPG
+            // Save original background
             const origBg = c.backgroundColor;
-            c.backgroundColor = '#ffffff';
+
+            // Create a pattern canvas matching the app's dot-grid background
+            const patternCanvas = document.createElement('canvas');
+            const dotSpacing = 30;
+            patternCanvas.width = dotSpacing;
+            patternCanvas.height = dotSpacing;
+            const pCtx = patternCanvas.getContext('2d');
+            // Fill with the dark base color
+            pCtx.fillStyle = '#0f172a';
+            pCtx.fillRect(0, 0, dotSpacing, dotSpacing);
+            // Draw the dot (matches CSS: radial-gradient(#334155 1px, transparent 1px))
+            pCtx.fillStyle = '#334155';
+            pCtx.beginPath();
+            pCtx.arc(dotSpacing / 2, dotSpacing / 2, 1, 0, Math.PI * 2);
+            pCtx.fill();
+
+            // Draw the pattern onto a full-size offscreen canvas
+            const exportCanvas = document.createElement('canvas');
+            const width = c.getWidth();
+            const height = c.getHeight();
+            exportCanvas.width = width * 2; // multiplier: 2
+            exportCanvas.height = height * 2;
+            const eCtx = exportCanvas.getContext('2d');
+            eCtx.scale(2, 2);
+            // Tile the dot pattern
+            const pattern = eCtx.createPattern(patternCanvas, 'repeat');
+            eCtx.fillStyle = pattern;
+            eCtx.fillRect(0, 0, width, height);
+
+            // Render the Fabric canvas on top (with transparent background)
+            c.backgroundColor = 'transparent';
             c.renderAll();
-            const dataURL = c.toDataURL({ format: 'jpeg', quality: 0.92, multiplier: 2 });
-            // Restore original background
-            c.backgroundColor = origBg;
-            c.renderAll();
-            // Trigger download
-            const link = document.createElement('a');
-            link.download = `nexus-canvas-${Date.now()}.jpg`;
-            link.href = dataURL;
-            link.click();
+            const fabricDataURL = c.toDataURL({ format: 'png', multiplier: 2 });
+
+            const fabricImg = new Image();
+            fabricImg.onload = () => {
+              eCtx.setTransform(1, 0, 0, 1, 0, 0); // reset scale
+              eCtx.drawImage(fabricImg, 0, 0);
+              // Restore original background
+              c.backgroundColor = origBg;
+              c.renderAll();
+              // Trigger download
+              const link = document.createElement('a');
+              link.download = `nexus-canvas-${Date.now()}.jpg`;
+              link.href = exportCanvas.toDataURL('image/jpeg', 0.92);
+              link.click();
+            };
+            fabricImg.src = fabricDataURL;
           }}
           title="Export as JPG"
         >
